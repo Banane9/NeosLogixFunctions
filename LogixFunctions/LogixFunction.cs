@@ -18,18 +18,23 @@ namespace LogixFunctions
         private const string ConnectPointName = "ConnectPoint";
         private const float NodeBaseWidth = 64;
         private const float NodeVerticalPadding = 8;
-        private static Slot currentLogixFunctionRoot = null;
         private static bool currentlyUnpacking = false;
-        private static LogixNode unpackingStartedAt = null;
+        private static Slot unpackRoot = null;
 
-        public static void EndPackingWithLogixFunctions(this LogixNode logixNode)
+        public static void EndUnpackingWithLogixFunctions(this Slot unpackStart)
         {
-            if (unpackingStartedAt != logixNode)
-                return;
-
             currentlyUnpacking = false;
-            unpackingStartedAt = null;
-            currentLogixFunctionRoot = null;
+            unpackRoot = null;
+        }
+
+        public static Slot FindLogixFunctionRoot(this LogixNode logixNode)
+        {
+            return logixNode.Slot.FindLogixFunctionRoot();
+        }
+
+        public static Slot FindLogixFunctionRoot(this Slot slot)
+        {
+            return slot.Tag == LogixFunctionTag ? slot : slot.FindParent(parent => parent.Tag == LogixFunctionTag);
         }
 
         public static Slot GenerateLogixFunctionVisual(this Slot logixFunctionRoot)
@@ -41,20 +46,24 @@ namespace LogixFunctions
             if (visual != null)
                 return visual;
 
+            var grabbable = logixFunctionRoot.GetComponentOrAttach<Grabbable>(out _);
+            grabbable.Scalable.Value = true;
+            grabbable.ReparentOnRelease.Value = true;
+
             // Generate
             var function = new Function(logixFunctionRoot);
             visual = logixFunctionRoot.AddSlot(LogixFunctionVisualName);
             if (!logixFunctionRoot.ActiveSelf)
                 visual.Tag = "Disabled";
 
-            var canvas = logixFunctionRoot.AddSlot("Canvas");
+            var canvas = visual.AddSlot("Canvas");
 
-            var width = NodeBaseWidth + 16f;
+            var width = NodeBaseWidth + 16;
             var height = function.Height + 2 * NodeVerticalPadding;
             var size = new float2(width, height);
 
-            var extraInputPadding = 0.5f * (function.Height - function.InputsHeight);
-            var extraOutputPadding = 0.5f * (function.Height - function.OutputsHeight);
+            var extraInputPadding = 0.5f * (height - function.InputsHeight);
+            var extraOutputPadding = 0.5f * (height - function.OutputsHeight);
 
             var inputYPos = extraInputPadding + 32f;
             var outputYPos = extraOutputPadding + 32f;
@@ -101,10 +110,8 @@ namespace LogixFunctions
                 connectPoint.Proxy.AttachComponent<OutputProxy>(true, null).OutputField.Target = outputElement;
             }
 
-            //foreach (var logixNode in this.OtherConnectedNodes)
-            //{
-            //    logixNode.GenerateVisual();
-            //}
+            foreach (var logixNode in function.OtherConnectedNodes)
+                logixNode.GenerateVisual();
 
             builder.VerticalLayout(0f, NodeVerticalPadding, null);
             builder.Text(logixFunctionRoot.Name).AutoSizeMin.Value = 0f;
@@ -160,24 +167,28 @@ namespace LogixFunctions
             return impulseTargetProxy?.Slot.Find(ConnectPointName);
         }
 
+        public static bool IsUnpackedAsLogixFunction(this LogixNode logixNode)
+        {
+            return logixNode.Slot.FindLogixFunctionRoot()?.Find(LogixFunctionVisualName) != null;
+        }
+
+        public static bool ShouldMoveWithPack(this LogixNode logixNode, Slot packRoot)
+        {
+            var nodeFunctionRoot = logixNode.FindLogixFunctionRoot();
+
+            return nodeFunctionRoot == null || packRoot.IsChildOf(nodeFunctionRoot, true);
+        }
+
         public static bool ShouldUnpackAsFunction(this LogixNode logixNode)
         {
-            return logixNode.FindLogixFunctionRoot() != currentLogixFunctionRoot;
+            // Unpack as function node, when the node has a function root, and it's (under) the unpacking root
+            return logixNode.IsUnpackedAsLogixFunction() || (logixNode.FindLogixFunctionRoot() is Slot functionRoot && !(unpackRoot?.IsChildOf(functionRoot) ?? true));
         }
 
-        public static void StartUnpackingWithLogixFunctions(this LogixNode logixNode)
+        public static void StartUnpackingWithLogixFunctions(this Slot packRoot)
         {
-            if (!currentlyUnpacking)
-            {
-                currentlyUnpacking = true;
-                unpackingStartedAt = logixNode;
-                currentLogixFunctionRoot = logixNode.FindLogixFunctionRoot();
-            }
-        }
-
-        private static Slot FindLogixFunctionRoot(this LogixNode logixNode)
-        {
-            return logixNode.Slot.FindParent(slot => slot.Tag == LogixFunctionTag);
+            currentlyUnpacking = true;
+            unpackRoot = packRoot;
         }
 
         private static ConnectPoint GenerateConnectPoint(this UIBuilder ui, float2 size, ref float yPos, Type type, bool outputSide, bool isOutput, bool genWire)
@@ -241,6 +252,7 @@ namespace LogixFunctions
             public readonly List<IInputElement> InputElements = new List<IInputElement>();
             public readonly float InputsHeight;
             public readonly List<LogixNode> LogixNodes;
+            public readonly List<LogixNode> OtherConnectedNodes = new List<LogixNode>();
             public readonly List<IOutputElement> OutputElements = new List<IOutputElement>();
             public readonly float OutputsHeight;
             public readonly Slot Root;
@@ -255,16 +267,19 @@ namespace LogixFunctions
                     var traverse = Traverse.Create(logixNode);
 
                     InputElements.AddRange(traverse.Property<EnumerableWrapper<IInputElement, LogixNode.InputEnumerator>>("Inputs").Value
-                        .Where(input => input.TargetNode.FindLogixFunctionRoot() != Root));
+                        .Where(input => input.TargetNode == null || input.TargetNode.FindLogixFunctionRoot() != Root));
 
                     OutputElements.AddRange(traverse.Property<EnumerableWrapper<IOutputElement, LogixNode.OutputEnumerator>>("Outputs").Value
-                        .Where(output => output.ConnectedInputs.Any(input => input.OwnerNode.FindLogixFunctionRoot() != Root)));
+                        .Where(output => !output.ConnectedInputs.Any() || output.ConnectedInputs.Any(input => input.OwnerNode.FindLogixFunctionRoot() != Root)));
 
                     ImpulseSources.AddRange(traverse.Property<EnumerableWrapper<Impulse, LogixNode.ImpulseEnumerator>>("ImpulseSources").Value
-                        .Where(impulseSource => impulseSource.TargetNode.FindLogixFunctionRoot() != Root));
+                        .Where(impulseSource => impulseSource.TargetNode == null || impulseSource.TargetNode.FindLogixFunctionRoot() != Root));
 
                     ImpulseTargets.AddRange(traverse.Property<IEnumerable<ImpulseTargetInfo>>("ImpulseTargets").Value
-                        .Where(impulseTarget => impulseTarget.Sources.Any(impulseSource => impulseSource.OwnerNode.FindLogixFunctionRoot() != Root)));
+                        .Where(impulseTarget => !impulseTarget.Sources.Any() || impulseTarget.Sources.Any(impulseSource => impulseSource.OwnerNode.FindLogixFunctionRoot() != Root)));
+
+                    OtherConnectedNodes.AddRange(traverse.Property<IEnumerable<LogixNode>>("OtherConnectedNodes").Value
+                        .Where(node => node.FindLogixFunctionRoot() != Root));
                 }
 
                 var inputs = ImpulseTargets.Count;

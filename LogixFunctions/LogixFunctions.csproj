@@ -59,7 +59,9 @@
     <Compile Include="LogixFunctions.cs" />
     <Compile Include="LogixHelperPatches.cs" />
     <Compile Include="LogixNodePatches.cs" />
+    <Compile Include="LogixTipPatches.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="RevealAllLogixVisualsPatch.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>

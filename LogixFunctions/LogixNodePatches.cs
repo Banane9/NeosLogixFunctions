@@ -17,22 +17,14 @@ namespace LogixFunctions
         [HarmonyPatch(nameof(LogixNode.GenerateVisual))]
         private static bool GenerateVisualPrefix(LogixNode __instance, ref bool ____generatingVisual, CleanupRef<Slot> ____activeVisual)
         {
-            if (__instance.IsDestroyed || ____generatingVisual || ____activeVisual.Target != null)
+            if (__instance.IsDestroyed || ____generatingVisual || ____activeVisual.Target != null /*|| __instance.IsUnpackedAsLogixFunction()*/)
                 return false;
 
             var traverse = Traverse.Create(__instance);
-            __instance.StartUnpackingWithLogixFunctions();
 
             try
             {
                 ____generatingVisual = true;
-
-                if (traverse.Property<bool>("Grabbable").Value)
-                {
-                    var grabbable = __instance.Slot.GetComponentOrAttach<Grabbable>(out _, null);
-                    grabbable.Scalable.Value = true;
-                    grabbable.ReparentOnRelease.Value = true;
-                }
 
                 foreach (IInputElement nodeInput in traverse.Property<EnumerableWrapper<IInputElement, LogixNode.InputEnumerator>>("Inputs").Value)
                 {
@@ -41,9 +33,16 @@ namespace LogixFunctions
                 }
 
                 if (__instance.ShouldUnpackAsFunction())
-                    __instance.GenerateLogixFunctionVisual();
+                    ____activeVisual.Target = __instance.GenerateLogixFunctionVisual();
                 else
                 {
+                    if (traverse.Property<bool>("Grabbable").Value)
+                    {
+                        var grabbable = __instance.Slot.GetComponentOrAttach<Grabbable>(out _);
+                        grabbable.Scalable.Value = true;
+                        grabbable.ReparentOnRelease.Value = true;
+                    }
+
                     var visual = __instance.Slot.AddSlot("Visual");
                     ____activeVisual.Target = visual;
 
@@ -74,8 +73,6 @@ namespace LogixFunctions
             finally
             {
                 ____generatingVisual = false;
-
-                __instance.EndPackingWithLogixFunctions();
             }
 
             return false;
